@@ -15,6 +15,7 @@ DEPENDENCIES = ["gea"]
 CONF_PAYLOAD = "payload"
 CONF_DISCOVERY = "discovery"
 CONF_SNIFFER = "sniffer"
+CONF_SNIFFER = "sniffer"
 
 GEAButton = gea_ns.class_("GEAButton", button.Button, cg.Component)
 
@@ -25,6 +26,7 @@ CONFIG_SCHEMA = (
             cv.GenerateID(CONF_GEA_ID): cv.use_id(GEAComponent),
             cv.Optional(CONF_ERD): cv.hex_uint16_t,
             cv.Optional(CONF_DISCOVERY, default=False): cv.boolean,
+            cv.Optional(CONF_SNIFFER, default=False): cv.boolean,
             cv.Optional(CONF_SNIFFER, default=False): cv.boolean,
             # Payload bytes to write when the button is pressed.
             # Accepts a list of integers, e.g. [0x01] or [0x00, 0x02].
