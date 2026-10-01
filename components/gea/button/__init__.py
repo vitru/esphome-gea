@@ -14,6 +14,7 @@ DEPENDENCIES = ["gea"]
 
 CONF_PAYLOAD = "payload"
 CONF_DISCOVERY = "discovery"
+CONF_SNIFFER = "sniffer"
 
 GEAButton = gea_ns.class_("GEAButton", button.Button, cg.Component)
 
@@ -24,6 +25,7 @@ CONFIG_SCHEMA = (
             cv.GenerateID(CONF_GEA_ID): cv.use_id(GEAComponent),
             cv.Optional(CONF_ERD): cv.hex_uint16_t,
             cv.Optional(CONF_DISCOVERY, default=False): cv.boolean,
+            cv.Optional(CONF_SNIFFER, default=False): cv.boolean,
             # Payload bytes to write when the button is pressed.
             # Accepts a list of integers, e.g. [0x01] or [0x00, 0x02].
             cv.Optional(CONF_PAYLOAD, default=[0x01]): cv.All(
@@ -36,10 +38,12 @@ CONFIG_SCHEMA = (
 
 
 def _validate_button(config):
-    if config[CONF_DISCOVERY] and CONF_ERD in config:
-        raise cv.Invalid("discovery buttons cannot also specify erd")
-    if not config[CONF_DISCOVERY] and CONF_ERD not in config:
-        raise cv.Invalid("gea button requires erd unless discovery: true")
+    if config[CONF_DISCOVERY] and config[CONF_SNIFFER]:
+        raise cv.Invalid("gea button cannot be both discovery and sniffer")
+    if (config[CONF_DISCOVERY] or config[CONF_SNIFFER]) and CONF_ERD in config:
+        raise cv.Invalid("discovery/sniffer buttons cannot also specify erd")
+    if not config[CONF_DISCOVERY] and not config[CONF_SNIFFER] and CONF_ERD not in config:
+        raise cv.Invalid("gea button requires erd unless discovery: true or sniffer: true")
     return config
 
 CONFIG_SCHEMA = cv.All(CONFIG_SCHEMA, _validate_button)
@@ -55,6 +59,8 @@ async def to_code(config):
     if config[CONF_DISCOVERY]:
         enable_gea2_discovery_support()
         cg.add(var.set_discovery(True))
+    elif config[CONF_SNIFFER]:
+        cg.add(var.set_sniffer(True))
     else:
         cg.add(var.set_erd(config[CONF_ERD]))
         for byte_val in config[CONF_PAYLOAD]:
