@@ -102,6 +102,13 @@ def _load_fork_erds():
     return result
 
 
+def enable_gea2_discovery_support():
+    """Compile the GEA2 discovery table for hub- or button-triggered scans."""
+    ge_table = _load_erd_table()
+    _write_gea2_discovery_table(ge_table, _load_fork_erds())
+    cg.add_build_flag("-DGEA_GEA2_DISCOVERY")
+
+
 def _write_gea2_discovery_table(ge_table, fork_erds):
     """Write components/gea/gea2_discovery_table.h with the merged GEA2 ERD scan list."""
     merged = sorted(set(ge_table.keys()) | fork_erds)
@@ -299,8 +306,7 @@ async def to_code(config):
         _write_erd_table_header(ge_table)
         cg.add_build_flag("-DGEA_ERD_LOOKUP")
     if config[CONF_GEA2_DISCOVERY]:
-        _write_gea2_discovery_table(ge_table, _load_fork_erds())
-        cg.add_build_flag("-DGEA_GEA2_DISCOVERY")
+        enable_gea2_discovery_support()
 
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
