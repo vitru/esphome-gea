@@ -1403,23 +1403,36 @@ void GEAComponent::start_gea2_discovery() {
     return;
   }
 #ifdef GEA_GEA2_DISCOVERY
-  discovery_bitmap_.assign(GEA2_DISCOVERY_BITMAP_BYTES, 0);
+  discovery_pref_ = global_preferences->make_preference<Gea2DiscoveryPrefs>(FNV_DISCOVERY_KEY, true);
+  Gea2DiscoveryPrefs prefs{};
+  bool have_prefs = discovery_pref_.load(&prefs);
+
   discovery_found_erds_.clear();
   discovery_index_ = 0;
   discovery_state_ = DiscoveryState::SCANNING;
   discovery_probe_ms_ = 0;
   gea2_discovery_ = true;
 
-  // Persist the reset immediately so a reboot during this scan resumes this
-  // run rather than loading results from an older completed scan.
-  discovery_pref_ = global_preferences->make_preference<Gea2DiscoveryPrefs>(FNV_DISCOVERY_KEY, true);
-  Gea2DiscoveryPrefs prefs{};
-  prefs.scan_index = 0;
-  memset(prefs.valid_bitmap, 0, GEA2_DISCOVERY_BITMAP_BYTES);
-  discovery_pref_.save(&prefs);
-
-  ESP_LOGI(TAG, "GEA2 runtime discovery started — scanning %zu known ERDs (~20-30 min)",
-           GEA2_DISCOVERY_TABLE_SIZE);
+  if (have_prefs && prefs.scan_index >= GEA2_DISCOVERY_TABLE_SIZE) {
+    // A completed inventory already exists. Re-read only those known-good ERDs
+    // so the button can quickly capture authoritative type/length/raw values.
+    discovery_bitmap_.assign(GEA2_DISCOVERY_BITMAP_BYTES, 0);
+    memcpy(discovery_bitmap_.data(), prefs.valid_bitmap, GEA2_DISCOVERY_BITMAP_BYTES);
+    for (size_t i = 0; i < GEA2_DISCOVERY_TABLE_SIZE; i++) {
+      if (discovery_bitmap_[i / 8] & (1u << (i % 8)))
+        discovery_found_erds_.push_back(GEA2_DISCOVERY_TABLE[i].id);
+    }
+    discovery_refresh_known_ = true;
+    ESP_LOGI(TAG, "GEA2 targeted discovery started — re-reading %zu saved ERDs", discovery_found_erds_.size());
+  } else {
+    // No completed inventory yet: retain the original exhaustive scan behavior.
+    discovery_refresh_known_ = false;
+    discovery_bitmap_.assign(GEA2_DISCOVERY_BITMAP_BYTES, 0);
+    prefs = {};
+    discovery_pref_.save(&prefs);
+    ESP_LOGI(TAG, "GEA2 runtime discovery started — scanning %zu known ERDs (~20-30 min)",
+             GEA2_DISCOVERY_TABLE_SIZE);
+  }
 #else
   ESP_LOGW(TAG, "Runtime ERD discovery support is not compiled into this firmware");
 #endif
@@ -1472,19 +1485,26 @@ void GEAComponent::discovery_init_() {
 }
 
 void GEAComponent::discovery_enqueue_next_() {
-  if (discovery_index_ >= GEA2_DISCOVERY_TABLE_SIZE) {
+  if (discovery_refresh_known_) {
+    if (discovery_index_ >= discovery_found_erds_.size()) {
+      discovery_finish_();
+      return;
+    }
+  } else if (discovery_index_ >= GEA2_DISCOVERY_TABLE_SIZE) {
     discovery_finish_();
     return;
   }
-  uint16_t erd = GEA2_DISCOVERY_TABLE[discovery_index_].id;
-  // Single attempt only — 250 ms timeout, then move on.
+  uint16_t erd = discovery_refresh_known_ ? discovery_found_erds_[discovery_index_]
+                                          : GEA2_DISCOVERY_TABLE[discovery_index_].id;
+  // Targeted refresh gets retries because every ERD is already known to exist.
+  // Exhaustive discovery remains single-shot to avoid multiplying scan time.
   std::vector<uint8_t> body = {0x01, (uint8_t)(erd >> 8), (uint8_t)(erd & 0xFF)};
   PendingRequest req;
   req.cmd = CMD_GEA2_READ;
   req.req_id = next_req_id_();
   req.dest = dest_addr_;
   req.body = std::move(body);
-  req.retries_left = 0;
+  req.retries_left = discovery_refresh_known_ ? 2 : 0;
   req.sent_at_ms = 0;
   req.is_discovery = true;
   request_queue_.push_back(std::move(req));
@@ -1513,8 +1533,10 @@ void GEAComponent::discovery_probe_bus_() {
 }
 
 void GEAComponent::discovery_on_response_(uint16_t erd, const std::vector<uint8_t> &data) {
-  discovery_found_erds_.push_back(erd);
-  discovery_bitmap_[discovery_index_ / 8] |= (1u << (discovery_index_ % 8));
+  if (!discovery_refresh_known_) {
+    discovery_found_erds_.push_back(erd);
+    discovery_bitmap_[discovery_index_ / 8] |= (1u << (discovery_index_ % 8));
+  }
 
   std::string raw = "0x";
   char byte_hex[3];
@@ -1544,21 +1566,27 @@ void GEAComponent::discovery_on_response_(uint16_t erd, const std::vector<uint8_
 }
 
 void GEAComponent::discovery_on_timeout_() {
-  ESP_LOGV(TAG, "Discovery: ERD 0x%04X no response (%zu / %zu)", GEA2_DISCOVERY_TABLE[discovery_index_].id,
-           discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
+  uint16_t erd = discovery_refresh_known_ ? discovery_found_erds_[discovery_index_]
+                                          : GEA2_DISCOVERY_TABLE[discovery_index_].id;
+  ESP_LOGW(TAG, "Discovery: known ERD 0x%04X did not respond after retries (%zu / %zu)", erd,
+           discovery_index_ + 1,
+           discovery_refresh_known_ ? discovery_found_erds_.size() : GEA2_DISCOVERY_TABLE_SIZE);
   discovery_advance_();
 }
 
 void GEAComponent::discovery_advance_() {
   discovery_index_++;
-  if (discovery_index_ % 50 == 0) {
-    uint32_t pct = (uint32_t)(discovery_index_ * 100 / GEA2_DISCOVERY_TABLE_SIZE);
-    ESP_LOGI(TAG, "Discovery progress: %zu / %zu (%u%%) — %zu ERDs found so far", discovery_index_,
-             GEA2_DISCOVERY_TABLE_SIZE, pct, discovery_found_erds_.size());
+  size_t total = discovery_refresh_known_ ? discovery_found_erds_.size() : GEA2_DISCOVERY_TABLE_SIZE;
+  if (discovery_refresh_known_) {
+    ESP_LOGI(TAG, "Targeted discovery progress: %zu / %zu", discovery_index_, total);
+  } else if (discovery_index_ % 50 == 0) {
+    uint32_t pct = (uint32_t)(discovery_index_ * 100 / total);
+    ESP_LOGI(TAG, "Discovery progress: %zu / %zu (%u%%) — %zu ERDs found so far", discovery_index_, total, pct,
+             discovery_found_erds_.size());
   }
-  if (discovery_index_ % 100 == 0)
+  if (!discovery_refresh_known_ && discovery_index_ % 100 == 0)
     discovery_save_progress_();
-  if (discovery_index_ >= GEA2_DISCOVERY_TABLE_SIZE)
+  if (discovery_index_ >= total)
     discovery_finish_();
 }
 
@@ -1568,7 +1596,7 @@ void GEAComponent::discovery_save_progress_() {
   memcpy(prefs.valid_bitmap, discovery_bitmap_.data(), GEA2_DISCOVERY_BITMAP_BYTES);
   discovery_pref_.save(&prefs);
   ESP_LOGD(TAG, "Discovery: saved progress — %zu / %zu scanned, %zu found", discovery_index_, GEA2_DISCOVERY_TABLE_SIZE,
-           poll_erds_.size());
+           discovery_found_erds_.size());
 }
 
 void GEAComponent::log_discovery_erds_() const {
@@ -1590,12 +1618,18 @@ void GEAComponent::log_discovery_erds_() const {
 }
 
 void GEAComponent::discovery_finish_() {
-  discovery_save_progress_();
+  if (!discovery_refresh_known_)
+    discovery_save_progress_();
   discovery_state_ = DiscoveryState::DONE;
-  ESP_LOGI(TAG, "GEA2 discovery complete — %zu ERDs responded out of %zu scanned", discovery_found_erds_.size(),
-           GEA2_DISCOVERY_TABLE_SIZE);
-  ESP_LOGI(TAG, "Copy the ERDs below into your YAML to build your configuration:");
-  log_discovery_erds_();
+  if (discovery_refresh_known_) {
+    ESP_LOGI(TAG, "GEA2 targeted discovery complete — refreshed %zu known ERDs", discovery_found_erds_.size());
+    discovery_refresh_known_ = false;
+  } else {
+    ESP_LOGI(TAG, "GEA2 discovery complete — %zu ERDs responded out of %zu scanned", discovery_found_erds_.size(),
+             GEA2_DISCOVERY_TABLE_SIZE);
+    ESP_LOGI(TAG, "Copy the ERDs below into your YAML to build your configuration:");
+    log_discovery_erds_();
+  }
 }
 
 #endif  // GEA_GEA2_DISCOVERY
