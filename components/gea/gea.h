@@ -436,6 +436,7 @@ class GEAComponent : public uart::UARTDevice, public Component {
   std::vector<uint8_t> discovery_bitmap_;       // one bit per table entry
   std::vector<uint16_t> discovery_found_erds_;  // ERDs that responded — info only
   ESPPreferenceObject discovery_pref_;
+  bool discovery_refresh_known_{false};  // re-read only ERDs from a completed saved inventory
 
   // Bus-liveness gate: the scan only advances while the bus is responsive, so a
   // dead/unpowered bus at boot (or an appliance powered off mid-scan) never
