@@ -14,6 +14,10 @@ namespace gea {
 
 static const char *const TAG = "gea";
 
+#ifdef GEA_GEA2_DISCOVERY
+static constexpr uint32_t FNV_DISCOVERY_KEY = 0xD15C0;
+#endif
+
 #ifdef GEA_ERD_LOOKUP
 static std::string decode_erd_value(const std::vector<uint8_t> &data, const char *type_str);
 #endif
@@ -1359,8 +1363,6 @@ void GEAComponent::start_gea2_discovery() {
 }
 
 #ifdef GEA_GEA2_DISCOVERY
-
-static constexpr uint32_t FNV_DISCOVERY_KEY = 0xD15C0;  // arbitrary stable key
 
 // djb2 hash over the model string bytes — used to detect appliance swap.
 static uint32_t model_hash(const std::vector<uint8_t> &data) {
