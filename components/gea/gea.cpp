@@ -959,6 +959,54 @@ void GEAComponent::drive_gea2_addr_discovery_() {
   }
 }
 
+void GEAComponent::toggle_gea2_sniffer() {
+  if (protocol_ != Protocol::GEA2) {
+    ESP_LOGW(TAG, "Passive bus sniffer is only available in GEA2 mode");
+    return;
+  }
+  gea2_sniffer_enabled_ = !gea2_sniffer_enabled_;
+  ESP_LOGI(TAG, "GEA2 passive bus sniffer %s", gea2_sniffer_enabled_ ? "ENABLED" : "DISABLED");
+}
+
+void GEAComponent::log_gea2_sniff_frame_(const std::vector<uint8_t> &pkt) const {
+  if (pkt.size() < 6)
+    return;
+  uint8_t dest = pkt[0];
+  uint8_t src = pkt[2];
+  uint8_t cmd = pkt[3];
+  std::string detail;
+
+  // Best-effort GEA2 ERD annotation. Reads and writes both carry an ERD after
+  // [cmd][count]. This intentionally only decodes enough to make traces useful.
+  if ((cmd == CMD_GEA2_READ || cmd == CMD_GEA2_WRITE) && pkt.size() >= 7 && pkt[4] >= 1) {
+    uint16_t erd = ((uint16_t) pkt[5] << 8) | pkt[6];
+    char buf[48];
+    snprintf(buf, sizeof(buf), " erd=0x%04X", erd);
+    detail = buf;
+#ifdef GEA_ERD_LOOKUP
+    const ErdTableEntry *info = erd_lookup(erd);
+    if (info != nullptr) {
+      detail += " ";
+      detail += info->name;
+      detail += " [";
+      detail += info->type;
+      detail += "]";
+    }
+#endif
+  }
+
+  std::string raw;
+  char hex[4];
+  for (size_t i = 3; i + 2 < pkt.size(); i++) {
+    snprintf(hex, sizeof(hex), "%02X", pkt[i]);
+    if (!raw.empty())
+      raw += " ";
+    raw += hex;
+  }
+  ESP_LOGI(TAG, "SNIFF src=0x%02X -> dst=0x%02X cmd=0x%02X%s payload=%s", src, dest, cmd, detail.c_str(),
+           raw.c_str());
+}
+
 // =============================================================================
 // GEAComponent — RX state machine
 // =============================================================================
@@ -1028,6 +1076,21 @@ void GEAComponent::process_packet_(const std::vector<uint8_t> &pkt) {
   // re-enter as phantom packets, and the echo masquerades as foreign traffic.
   if (src == src_addr_) {
     ESP_LOGV(TAG, "RX: self-echo (TX loopback) from 0x%02X, dropping", src);
+    return;
+  }
+
+  // In passive-sniffer mode, validate and log foreign traffic before the normal
+  // destination filter. Do not ACK or dispatch it: doing either would make the
+  // observer an active participant in somebody else's exchange.
+  if (protocol_ == Protocol::GEA2 && gea2_sniffer_enabled_ &&
+      dest != src_addr_ && dest != GEA_BROADCAST_ADDR) {
+    size_t sniff_crc_offset = pkt.size() - 2;
+    uint16_t sniff_rx_crc = ((uint16_t) pkt[sniff_crc_offset] << 8) | pkt[sniff_crc_offset + 1];
+    uint16_t sniff_calc_crc = crc16_(pkt.data(), sniff_crc_offset);
+    if (sniff_rx_crc == sniff_calc_crc)
+      log_gea2_sniff_frame_(pkt);
+    else
+      ESP_LOGV(TAG, "SNIFF invalid CRC src=0x%02X -> dst=0x%02X", src, dest);
     return;
   }
 
