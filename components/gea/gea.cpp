@@ -1452,7 +1452,18 @@ void GEAComponent::discovery_probe_bus_() {
 void GEAComponent::discovery_on_response_(uint16_t erd) {
   discovery_found_erds_.push_back(erd);
   discovery_bitmap_[discovery_index_ / 8] |= (1u << (discovery_index_ % 8));
-  ESP_LOGD(TAG, "Discovery: ERD 0x%04X responded (%zu / %zu)", erd, discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
+#ifdef GEA_ERD_LOOKUP
+  const ErdTableEntry *info = erd_lookup(erd);
+  if (info != nullptr) {
+    ESP_LOGI(TAG, "Discovery: 0x%04X  %-40s  type=%s  ops=%s  (%zu / %zu)", erd, info->name, info->type, info->ops,
+             discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
+  } else {
+    ESP_LOGI(TAG, "Discovery: 0x%04X  (undocumented)  (%zu / %zu)", erd, discovery_index_ + 1,
+             GEA2_DISCOVERY_TABLE_SIZE);
+  }
+#else
+  ESP_LOGI(TAG, "Discovery: ERD 0x%04X responded (%zu / %zu)", erd, discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
+#endif
   discovery_advance_();
 }
 
