@@ -213,6 +213,10 @@ class GEAComponent : public uart::UARTDevice, public Component {
   // ---- Explicit read — enqueues a single ERD read request -----------------
   void read_erd(uint16_t erd);
 
+  // Start a fresh GEA2 ERD discovery scan at runtime. The discovery table must
+  // be compiled into the firmware (gea2_discovery or a discovery button does this).
+  void start_gea2_discovery();
+
   // ---- Status — usable in YAML lambdas (e.g. for a GEA-connected LED) -----
   // Returns true if a valid packet has been received within the last 30 s.
   bool is_bus_connected() const { return last_rx_ms_ != 0 && (millis() - last_rx_ms_) < 30000; }
