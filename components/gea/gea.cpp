@@ -1322,6 +1322,42 @@ void GEAComponent::log_discovery_(uint16_t erd, const std::vector<uint8_t> &data
 // GEAComponent — GEA2 ERD discovery (compiled only when GEA_GEA2_DISCOVERY set)
 // =============================================================================
 
+void GEAComponent::start_gea2_discovery() {
+  if (protocol_ != Protocol::GEA2) {
+    ESP_LOGW(TAG, "Runtime ERD discovery is only available in GEA2 mode");
+    return;
+  }
+  if (gea2_addr_discovery_) {
+    ESP_LOGW(TAG, "Cannot start ERD discovery while appliance address discovery is active");
+    return;
+  }
+  if (pending_active_ || !request_queue_.empty()) {
+    ESP_LOGW(TAG, "Cannot start ERD discovery while a GEA request is in flight; try again");
+    return;
+  }
+#ifdef GEA_GEA2_DISCOVERY
+  discovery_bitmap_.assign(GEA2_DISCOVERY_BITMAP_BYTES, 0);
+  discovery_found_erds_.clear();
+  discovery_index_ = 0;
+  discovery_state_ = DiscoveryState::SCANNING;
+  discovery_probe_ms_ = 0;
+  gea2_discovery_ = true;
+
+  // Persist the reset immediately so a reboot during this scan resumes this
+  // run rather than loading results from an older completed scan.
+  discovery_pref_ = global_preferences->make_preference<Gea2DiscoveryPrefs>(FNV_DISCOVERY_KEY, true);
+  Gea2DiscoveryPrefs prefs{};
+  prefs.scan_index = 0;
+  memset(prefs.valid_bitmap, 0, GEA2_DISCOVERY_BITMAP_BYTES);
+  discovery_pref_.save(&prefs);
+
+  ESP_LOGI(TAG, "GEA2 runtime discovery started — scanning %zu known ERDs (~20-30 min)",
+           GEA2_DISCOVERY_TABLE_SIZE);
+#else
+  ESP_LOGW(TAG, "Runtime ERD discovery support is not compiled into this firmware");
+#endif
+}
+
 #ifdef GEA_GEA2_DISCOVERY
 
 static constexpr uint32_t FNV_DISCOVERY_KEY = 0xD15C0;  // arbitrary stable key
