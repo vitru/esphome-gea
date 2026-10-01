@@ -34,3 +34,8 @@ button:
     gea_id: gea_hub
     name: "Run GEA2 ERD Discovery"
     discovery: true
+
+  - platform: gea
+    gea_id: gea_hub
+    name: "Toggle GEA2 Passive Sniffer"
+    sniffer: true
