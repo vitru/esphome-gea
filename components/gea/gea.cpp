@@ -244,6 +244,7 @@ void GEAComponent::send_packet_(uint8_t dest, const std::vector<uint8_t> &payloa
     gea2_echo_buf_ = std::move(frame);
     gea2_echo_idx_ = 0;
     gea2_echo_at_ms_ = millis();
+    gea2_tx_frames_++;
   }
 }
 
@@ -357,21 +358,44 @@ bool GEAComponent::consume_gea2_echo_byte_(uint8_t byte) {
       ESP_LOGV(TAG, "GEA2 TX echo verified (%zu bytes)", gea2_echo_buf_.size());
       gea2_echo_buf_.clear();
       gea2_echo_idx_ = 0;
+      gea2_echo_ever_verified_ = true;
     }
     return true;
   }
+
   tx_collisions_++;
   ESP_LOGD(TAG, "GEA2 collision: echo byte %zu read 0x%02X, sent 0x%02X — scheduling fast retry", gea2_echo_idx_, byte,
            gea2_echo_buf_[gea2_echo_idx_]);
+
+  // Bytes matched before the divergence were only presumed to be our echo.
+  // An appliance reply also begins with STX, so replay those consumed bytes
+  // into the parser rather than beheading a legitimate inbound frame.
+  std::vector<uint8_t> presumed = std::move(gea2_echo_buf_);
+  size_t presumed_len = gea2_echo_idx_;
   gea2_echo_buf_.clear();
   gea2_echo_idx_ = 0;
+
   if (pending_active_) {
-    // Backdate the send timestamp so the regular timeout machinery fires
-    // after the backoff rather than after the full REQUEST_TIMEOUT_MS.
     uint32_t backoff = GEA2_COLLISION_BACKOFF_MIN_MS + (random_uint32() % GEA2_COLLISION_BACKOFF_SPAN_MS);
     pending_.sent_at_ms = millis() - REQUEST_TIMEOUT_MS + backoff;
   }
-  return false;  // garbled byte — let the parser see it and resync on STX
+  for (size_t i = 0; i < presumed_len; i++)
+    process_rx_byte_(presumed[i]);
+  return false;
+}
+
+void GEAComponent::report_gea2_echo_wiring_() {
+  if (gea2_echo_ever_verified_ || gea2_tx_frames_ < GEA2_ECHO_PROBE_FRAMES)
+    return;
+  uint32_t now = millis();
+  if (gea2_echo_warned_ && now - gea2_echo_warn_ms_ < GEA2_ECHO_WARN_INTERVAL_MS)
+    return;
+  gea2_echo_warned_ = true;
+  gea2_echo_warn_ms_ = now;
+  ESP_LOGW(TAG,
+           "GEA2 TX echo never verified after %u frames — wiring may not loop TX back onto RX (or echo is truncated); "
+           "collision detection is degraded",
+           gea2_tx_frames_);
 }
 
 // Returns true if an incoming response's command and request ID match the
@@ -669,6 +693,7 @@ void GEAComponent::loop() {
     if (protocol_ == Protocol::GEA2) {
       ESP_LOGD(TAG, "RX stats: %u bytes total, %u TX collisions, bus %s", rx_byte_count_, tx_collisions_,
                is_bus_connected() ? "CONNECTED" : "no valid packets yet");
+      report_gea2_echo_wiring_();
     } else {
       ESP_LOGD(TAG, "RX stats: %u bytes total, bus %s", rx_byte_count_,
                is_bus_connected() ? "CONNECTED" : "no valid packets yet");
