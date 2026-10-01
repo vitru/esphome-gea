@@ -217,6 +217,12 @@ class GEAComponent : public uart::UARTDevice, public Component {
   // be compiled into the firmware (gea2_discovery or a discovery button does this).
   void start_gea2_discovery();
 
+  // Toggle passive GEA2 bus sniffing. While enabled, valid frames addressed to
+  // other nodes are logged but never ACKed or dispatched, so observation does
+  // not alter bus behavior.
+  void toggle_gea2_sniffer();
+  bool is_gea2_sniffer_enabled() const { return gea2_sniffer_enabled_; }
+
   // ---- Status — usable in YAML lambdas (e.g. for a GEA-connected LED) -----
   // Returns true if a valid packet has been received within the last 30 s.
   bool is_bus_connected() const { return last_rx_ms_ != 0 && (millis() - last_rx_ms_) < 30000; }
@@ -376,6 +382,11 @@ class GEAComponent : public uart::UARTDevice, public Component {
   uint32_t tx_retries_{0};
   uint32_t dropped_requests_{0};
   uint32_t tx_collisions_{0};
+
+  // Passive GEA2 sniffer. Foreign valid frames are logged before the normal
+  // destination filter and are not acknowledged or otherwise acted upon.
+  bool gea2_sniffer_enabled_{false};
+  void log_gea2_sniff_frame_(const std::vector<uint8_t> &pkt) const;
 
   // ERD discovery map: ERD address → most recently received data bytes.
   // Populated on first publication of each ERD; updated silently thereafter.
