@@ -854,7 +854,7 @@ void GEAComponent::build_poll_list_() {
       poll_erds_.push_back(erd);
   }
   poll_list_built_ = true;
-  ESP_LOGI(TAG, "GEA2 poll list built: %zu unique ERDs", poll_erds_.size());
+  ESP_LOGI(TAG, "GEA2 poll list built: %zu unique ERDs", discovery_found_erds_.size());
 }
 
 // Enqueue a read for the next ERD in the round-robin. Skips silently if the
@@ -1268,7 +1268,7 @@ void GEAComponent::process_packet_(const std::vector<uint8_t> &pkt) {
       }
 #ifdef GEA_GEA2_DISCOVERY
       if (pending_.is_discovery) {
-        discovery_on_response_(erd);
+        discovery_on_response_(erd, data);
         finish_pending_();
         break;
       }
@@ -1512,21 +1512,34 @@ void GEAComponent::discovery_probe_bus_() {
   ESP_LOGD(TAG, "GEA2 discovery: bus quiet — liveness probe of ERD 0x%04X", GEA2_LIVENESS_ERD);
 }
 
-void GEAComponent::discovery_on_response_(uint16_t erd) {
+void GEAComponent::discovery_on_response_(uint16_t erd, const std::vector<uint8_t> &data) {
   discovery_found_erds_.push_back(erd);
   discovery_bitmap_[discovery_index_ / 8] |= (1u << (discovery_index_ % 8));
+
+  std::string raw = "0x";
+  char byte_hex[3];
+  for (uint8_t b : data) {
+    snprintf(byte_hex, sizeof(byte_hex), "%02X", b);
+    raw += byte_hex;
+  }
+
 #ifdef GEA_ERD_LOOKUP
   const ErdTableEntry *info = erd_lookup(erd);
   if (info != nullptr) {
-    ESP_LOGI(TAG, "Discovery: 0x%04X  %-40s  type=%s  ops=%s  (%zu / %zu)", erd, info->name, info->type, info->ops,
-             discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
+    ESP_LOGI(TAG, "Discovery: 0x%04X  %-40s type=%s ops=%s len=%zu raw=%s  (%zu / %zu)", erd, info->name,
+             info->type, info->ops, data.size(), raw.c_str(), discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
   } else {
-    ESP_LOGI(TAG, "Discovery: 0x%04X  (undocumented)  (%zu / %zu)", erd, discovery_index_ + 1,
-             GEA2_DISCOVERY_TABLE_SIZE);
+    ESP_LOGI(TAG, "Discovery: 0x%04X  (undocumented) len=%zu raw=%s  (%zu / %zu)", erd, data.size(), raw.c_str(),
+             discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
   }
 #else
-  ESP_LOGI(TAG, "Discovery: ERD 0x%04X responded (%zu / %zu)", erd, discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
+  ESP_LOGI(TAG, "Discovery: ERD 0x%04X responded len=%zu raw=%s (%zu / %zu)", erd, data.size(), raw.c_str(),
+           discovery_index_ + 1, GEA2_DISCOVERY_TABLE_SIZE);
 #endif
+
+  // Keep the value in the normal discovery cache as well, so log_erds() can
+  // report the latest payload after the active scan has moved on.
+  log_discovery_(erd, data);
   discovery_advance_();
 }
 
