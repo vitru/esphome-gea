@@ -450,7 +450,7 @@ class GEAComponent : public uart::UARTDevice, public Component {
   void discovery_init_();
   void discovery_enqueue_next_();
   void discovery_probe_bus_();
-  void discovery_on_response_(uint16_t erd);
+  void discovery_on_response_(uint16_t erd, const std::vector<uint8_t> &data);
   void discovery_on_timeout_();
   void discovery_advance_();
   void discovery_save_progress_();
