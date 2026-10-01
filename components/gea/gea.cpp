@@ -16,6 +16,22 @@ static const char *const TAG = "gea";
 
 #ifdef GEA_GEA2_DISCOVERY
 static constexpr uint32_t FNV_DISCOVERY_KEY = 0xD15C0;
+
+// Known-good Bradford White RE2H50S10 GEA2 inventory, confirmed by a complete
+// appliance scan. Runtime targeted discovery uses this stable list rather than
+// the persisted scan bitmap, which can be incomplete after a lossy scan.
+static constexpr uint16_t RE2H_KNOWN_ERDS[] = {
+    0x0001, 0x0002, 0x0007, 0x0008,
+    0x4020, 0x4023, 0x4024, 0x4025, 0x4026, 0x4028,
+    0x4040, 0x4041, 0x4047, 0x4048, 0x4049, 0x404A, 0x404C, 0x404D,
+    0x4056, 0x4058, 0x405F,
+    0x4060, 0x4061, 0x4062, 0x4063, 0x4064, 0x4065, 0x4066, 0x4068, 0x4069, 0x406E,
+    0x4081, 0x4082, 0x4083,
+    0x4101, 0x4102, 0x4103, 0x4105, 0x4107,
+    0x6003,
+    0xD001, 0xD002, 0xD007, 0xD008,
+};
+static constexpr size_t RE2H_KNOWN_ERD_COUNT = sizeof(RE2H_KNOWN_ERDS) / sizeof(RE2H_KNOWN_ERDS[0]);
 #endif
 
 #ifdef GEA_ERD_LOOKUP
@@ -1403,36 +1419,13 @@ void GEAComponent::start_gea2_discovery() {
     return;
   }
 #ifdef GEA_GEA2_DISCOVERY
-  discovery_pref_ = global_preferences->make_preference<Gea2DiscoveryPrefs>(FNV_DISCOVERY_KEY, true);
-  Gea2DiscoveryPrefs prefs{};
-  bool have_prefs = discovery_pref_.load(&prefs);
-
-  discovery_found_erds_.clear();
+  discovery_found_erds_.assign(RE2H_KNOWN_ERDS, RE2H_KNOWN_ERDS + RE2H_KNOWN_ERD_COUNT);
   discovery_index_ = 0;
   discovery_state_ = DiscoveryState::SCANNING;
   discovery_probe_ms_ = 0;
+  discovery_refresh_known_ = true;
   gea2_discovery_ = true;
-
-  if (have_prefs && prefs.scan_index >= GEA2_DISCOVERY_TABLE_SIZE) {
-    // A completed inventory already exists. Re-read only those known-good ERDs
-    // so the button can quickly capture authoritative type/length/raw values.
-    discovery_bitmap_.assign(GEA2_DISCOVERY_BITMAP_BYTES, 0);
-    memcpy(discovery_bitmap_.data(), prefs.valid_bitmap, GEA2_DISCOVERY_BITMAP_BYTES);
-    for (size_t i = 0; i < GEA2_DISCOVERY_TABLE_SIZE; i++) {
-      if (discovery_bitmap_[i / 8] & (1u << (i % 8)))
-        discovery_found_erds_.push_back(GEA2_DISCOVERY_TABLE[i].id);
-    }
-    discovery_refresh_known_ = true;
-    ESP_LOGI(TAG, "GEA2 targeted discovery started — re-reading %zu saved ERDs", discovery_found_erds_.size());
-  } else {
-    // No completed inventory yet: retain the original exhaustive scan behavior.
-    discovery_refresh_known_ = false;
-    discovery_bitmap_.assign(GEA2_DISCOVERY_BITMAP_BYTES, 0);
-    prefs = {};
-    discovery_pref_.save(&prefs);
-    ESP_LOGI(TAG, "GEA2 runtime discovery started — scanning %zu known ERDs (~20-30 min)",
-             GEA2_DISCOVERY_TABLE_SIZE);
-  }
+  ESP_LOGI(TAG, "GEA2 targeted discovery started — re-reading %zu known RE2H ERDs", discovery_found_erds_.size());
 #else
   ESP_LOGW(TAG, "Runtime ERD discovery support is not compiled into this firmware");
 #endif
