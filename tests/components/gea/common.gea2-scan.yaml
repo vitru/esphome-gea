@@ -27,3 +27,9 @@ sensor:
     name: "u8"
     erd: 0x0001
     decode: uint8
+
+button:
+  - platform: gea
+    gea_id: gea_hub
+    name: "Run GEA2 ERD Discovery"
+    discovery: true
