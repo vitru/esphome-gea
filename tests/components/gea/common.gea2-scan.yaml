@@ -20,6 +20,7 @@ gea:
   src_address: 0xBB
   dest_address: 0xC0
   gea2_discovery: true
+  erd_lookup: true
 
 sensor:
   - platform: gea
@@ -27,3 +28,14 @@ sensor:
     name: "u8"
     erd: 0x0001
     decode: uint8
+
+button:
+  - platform: gea
+    gea_id: gea_hub
+    name: "Run GEA2 ERD Discovery"
+    discovery: true
+
+  - platform: gea
+    gea_id: gea_hub
+    name: "Toggle GEA2 Passive Sniffer"
+    sniffer: true

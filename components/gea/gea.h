@@ -213,6 +213,16 @@ class GEAComponent : public uart::UARTDevice, public Component {
   // ---- Explicit read — enqueues a single ERD read request -----------------
   void read_erd(uint16_t erd);
 
+  // Start a fresh GEA2 ERD discovery scan at runtime. The discovery table must
+  // be compiled into the firmware (gea2_discovery or a discovery button does this).
+  void start_gea2_discovery();
+
+  // Toggle passive GEA2 bus sniffing. While enabled, valid frames addressed to
+  // other nodes are logged but never ACKed or dispatched, so observation does
+  // not alter bus behavior.
+  void toggle_gea2_sniffer();
+  bool is_gea2_sniffer_enabled() const { return gea2_sniffer_enabled_; }
+
   // ---- Status — usable in YAML lambdas (e.g. for a GEA-connected LED) -----
   // Returns true if a valid packet has been received within the last 30 s.
   bool is_bus_connected() const { return last_rx_ms_ != 0 && (millis() - last_rx_ms_) < 30000; }
@@ -278,6 +288,7 @@ class GEAComponent : public uart::UARTDevice, public Component {
   // GEA2 collision avoidance (bus-idle gate) and detection (TX echo check)
   bool gea2_bus_clear_() const;
   bool consume_gea2_echo_byte_(uint8_t byte);
+  void report_gea2_echo_wiring_();
 
   // RX state machine
   void process_rx_byte_(uint8_t byte);
@@ -343,7 +354,15 @@ class GEAComponent : public uart::UARTDevice, public Component {
   static constexpr uint32_t GEA2_COLLISION_BACKOFF_SPAN_MS = 18;
   std::vector<uint8_t> gea2_echo_buf_;  // expected echo (exact wire bytes)
   size_t gea2_echo_idx_{0};             // match cursor into gea2_echo_buf_
-  uint32_t gea2_echo_at_ms_{0};         // when the frame was written (for the timeout)
+  uint32_t gea2_echo_at_ms_{0};
+  // Echo wiring diagnostics. A conforming single-wire GEA2 adapter loops TX
+  // back to RX; without that echo, byte-level collision detection is impossible.
+  uint32_t gea2_tx_frames_{0};
+  bool gea2_echo_ever_verified_{false};
+  bool gea2_echo_warned_{false};
+  uint32_t gea2_echo_warn_ms_{0};
+  static constexpr uint32_t GEA2_ECHO_PROBE_FRAMES = 5;
+  static constexpr uint32_t GEA2_ECHO_WARN_INTERVAL_MS = 600000;         // when the frame was written (for the timeout)
   // Runs loop() continuously while a GEA2 exchange is in flight so the echo
   // matcher, backoff retries and the bus-idle gate react at millisecond
   // resolution instead of the ~16 ms default loop interval.  Released as soon
@@ -372,6 +391,11 @@ class GEAComponent : public uart::UARTDevice, public Component {
   uint32_t tx_retries_{0};
   uint32_t dropped_requests_{0};
   uint32_t tx_collisions_{0};
+
+  // Passive GEA2 sniffer. Foreign valid frames are logged before the normal
+  // destination filter and are not acknowledged or otherwise acted upon.
+  bool gea2_sniffer_enabled_{false};
+  void log_gea2_sniff_frame_(const std::vector<uint8_t> &pkt) const;
 
   // ERD discovery map: ERD address → most recently received data bytes.
   // Populated on first publication of each ERD; updated silently thereafter.
@@ -421,6 +445,7 @@ class GEAComponent : public uart::UARTDevice, public Component {
   std::vector<uint8_t> discovery_bitmap_;       // one bit per table entry
   std::vector<uint16_t> discovery_found_erds_;  // ERDs that responded — info only
   ESPPreferenceObject discovery_pref_;
+  bool discovery_refresh_known_{false};  // re-read only ERDs from a completed saved inventory
 
   // Bus-liveness gate: the scan only advances while the bus is responsive, so a
   // dead/unpowered bus at boot (or an appliance powered off mid-scan) never
@@ -435,7 +460,7 @@ class GEAComponent : public uart::UARTDevice, public Component {
   void discovery_init_();
   void discovery_enqueue_next_();
   void discovery_probe_bus_();
-  void discovery_on_response_(uint16_t erd);
+  void discovery_on_response_(uint16_t erd, const std::vector<uint8_t> &data);
   void discovery_on_timeout_();
   void discovery_advance_();
   void discovery_save_progress_();
